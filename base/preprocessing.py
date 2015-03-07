@@ -106,10 +106,10 @@ def search_numbers(img, supervised, dataset):
         if count > 2:
             break
     labels = np.array(labels)
-    unsupervised = KMeans(n_clusters=6, n_jobs=6)
+    unsupervised = KMeans(n_clusters=5, n_jobs=6)
     unsupervised.fit(centers)
     labels_cluster = unsupervised.fit_predict(centers)
-    for id_cluster in xrange(6):
+    for id_cluster in xrange(5):
         indexes = np.where(labels_cluster == id_cluster)
         labels_per_cluster = labels[indexes]
         keys = find_keys(labels_per_cluster)
