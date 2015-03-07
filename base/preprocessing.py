@@ -6,18 +6,13 @@ Created on Mar 5, 2015
 from skimage.color.colorconv import rgb2gray
 from skimage.exposure._adapthist import equalize_adapthist
 from skimage.transform._warps import resize
-import matplotlib.pyplot as plt
 from skimage.feature._hog import hog
-from skimage.exposure.exposure import rescale_intensity
 from skimage.transform.pyramids import pyramid_gaussian
 from skimage.io._io import imread
-from skimage.util.shape import view_as_windows
 import numpy as np
-from sklearn.feature_extraction.image import extract_patches_2d, extract_patches
+from sklearn.feature_extraction.image import extract_patches
 import matplotlib.pyplot as plt
 from sklearn.cluster.k_means_ import KMeans
-from skimage.filters.rank.generic import median
-from skimage.morphology.selem import disk
 
 def run(img):
     rows = 88
@@ -33,7 +28,6 @@ def run(img):
     
     # Histogram of Oriented Gradients
     img = rgb2gray(img)
-    img = median(img, disk(5))
     
     fd, hog_image = hog(img, orientations=8,
                         pixels_per_cell=(16, 16),
@@ -75,7 +69,7 @@ def find_keys(seq):
 def search_numbers(img, supervised, dataset):
     rows = 88
     cols = 64
-    step = 1
+    step = 10
     img = imread(img)
     pyramid = tuple(pyramid_gaussian(img, downscale=2))
     centers = None
@@ -109,7 +103,7 @@ def search_numbers(img, supervised, dataset):
                     
         
         count += 1
-        if count == 1:
+        if count > 2:
             break
     labels = np.array(labels)
     unsupervised = KMeans(n_clusters=6, n_jobs=6)
