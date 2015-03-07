@@ -13,6 +13,14 @@ import numpy as np
 from sklearn.feature_extraction.image import extract_patches
 import matplotlib.pyplot as plt
 from sklearn.cluster.k_means_ import KMeans
+from skimage.segmentation.slic_superpixels import slic
+from skimage.measure._regionprops import regionprops
+from skimage.util.shape import view_as_windows
+from sklearn.externals.joblib.parallel import Parallel, delayed
+import tempfile
+import os
+from sklearn.externals import joblib
+import shutil
 
 def run(img):
     rows = 88
@@ -54,11 +62,13 @@ def find_center(origin, window_size):
 
 def parallel_predict(current_patch,
                      supervised,
-                     dataset):
+                     y,
+                     x,
+                     window_size,
+                     step):
     features = run(current_patch)
     predicted_class = supervised.classifier.predict(features)
-    class_name = dataset.classes[predicted_class]
-    return class_name
+    return predicted_class[0]
 
 def find_keys(seq):
     keys = {}
@@ -67,60 +77,90 @@ def find_keys(seq):
     return keys.keys()  
 
 def search_numbers(img, supervised, dataset):
-    rows = 88
-    cols = 64
     step = 10
     img = imread(img)
-    pyramid = tuple(pyramid_gaussian(img, downscale=2))
-    centers = None
-    labels = list()
-    count = 0
-    letters = list()
-    for current_image in reversed(pyramid):
-        (img_rows, img_cols, _) = current_image.shape
-        if img_rows < rows or img_cols < cols:
-            continue
-        factor = img.shape[0] / img_rows
-        windows = extract_patches(current_image,
-                                  (rows, cols, 3),
-                                  step)
-        (y_index, x_index) = windows.shape[0:2]
-        for y in xrange(y_index):
-            for x in xrange(x_index):
-                current_patch = windows[y, x, 0, :]
-                features = run(current_patch)
-                predicted_class = supervised.classifier.predict(features)
-                class_name = dataset.classes[predicted_class]
-                if class_name is not dataset.classes[-1]:
-                    # Character detected
-                    # Find center
-                    center = find_center(np.array([y * step, x * step]),
-                                         np.array([rows, cols]))
-                    center = center * factor
-                    centers = [center] if centers is None \
-                              else np.append(centers, [center], axis=0)
-                    labels.append(class_name)
-                    
-        
-        count += 1
-        if count > 2:
-            break
-    labels = np.array(labels)
-    unsupervised = KMeans(n_clusters=5, n_jobs=6)
+    segments_slic = slic(img,
+                         n_segments=10,
+                         sigma=0.5,
+                         convert2lab=True,
+                         enforce_connectivity=False,
+                         slic_zero=True)
+    regions_prop = regionprops(segments_slic)
+    window_sizes = list()
+    for region_prop in regions_prop:
+        bbox = np.array(region_prop.bbox)
+        selected_region = img[bbox[0]:bbox[2], bbox[1]:bbox[3], :]
+        features = run(selected_region)
+        predicted_class = supervised.classifier.predict(features)
+        if dataset.classes[predicted_class] is not dataset.classes[-1]:
+            # Desired window found
+            window_size = (bbox[2] - bbox[0],
+                           bbox[3] - bbox[1])
+            window_sizes.append(window_size)
+            
+    window_sizes = np.array(window_sizes)
+    window_size = np.mean(window_sizes, axis=0)
+    window_size = window_size.astype(np.int16)
+    
+    # View as window
+    windows = extract_patches(img, (window_size[0],
+                                    window_size[1],
+                                    3),
+                              step)
+    
+    (y_index, x_index) = windows.shape[0:2]
+    
+    features = Parallel(n_jobs=-1
+                        )(delayed(run)(windows[y, x, 0, :])
+                          for y in xrange(y_index)
+                            for x in xrange(x_index))
+    
+    centers = Parallel(n_jobs=-1
+                       )(delayed(find_center)(np.array([y * step,
+                                                        x * step]),
+                                              window_size)
+                         for y in xrange(y_index)
+                            for x in xrange(x_index))
+                        
+    features = np.array(features)
+    centers = np.array(centers)
+    labels = supervised.classifier.predict(features)
+    
+    # Remove data from background
+    indexes_background = np.where(labels != len(dataset.classes) - 1)[0]
+    features = features[indexes_background]
+    centers = centers[indexes_background]
+    labels = labels[indexes_background]
+    
+    unsupervised = KMeans(n_clusters=6, n_jobs=-1)
     unsupervised.fit(centers)
-    labels_cluster = unsupervised.fit_predict(centers)
-    for id_cluster in xrange(5):
-        indexes = np.where(labels_cluster == id_cluster)
+    clusters = unsupervised.fit_predict(centers)
+    label_per_cluster = list()
+    for id_cluster in xrange(unsupervised.n_clusters):
+        indexes = np.where(clusters == id_cluster)
         labels_per_cluster = labels[indexes]
-        keys = find_keys(labels_per_cluster)
-        number = 0
-        letter_result = ''
-        for key in keys:
-            counted = len(np.where(labels_per_cluster == key)[0])
-            if counted > number:
-                letter_result = key
-                number = counted
-        letters.append((letter_result, unsupervised.cluster_centers_[id_cluster][1]))
-    return sorted(letters, key=lambda center: center[1])
+        unique_elements = np.unique(labels_per_cluster)
+        min_element = 0
+        max_element = np.max(unique_elements)
+        counted_labels = np.bincount(labels_per_cluster)
+        generated_labels = np.arange(min_element,
+                                     max_element + 1)
+        amax = np.argmax(counted_labels)
+        label_per_cluster.append(generated_labels[amax])
+            
+    label_per_cluster = np.array(label_per_cluster)
+    
+    # Order cluster by x
+    x_centers = unsupervised.cluster_centers_[:, 1]
+    ordered_index = np.argsort(x_centers)
+    label_per_cluster = label_per_cluster[ordered_index]
+    
+    numbers = ''
+    for l in label_per_cluster:
+        numbers+=dataset.classes[l]
+        
+    return numbers
+        
+    
                 
                 

@@ -33,5 +33,3 @@ def predict(argv):
     
     
     print letters
-    
-    print letters[:, 0]
